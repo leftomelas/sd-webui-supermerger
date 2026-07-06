@@ -27,7 +27,43 @@ from tqdm import tqdm
 forge = launch_utils.git_tag()[0:2] == "f2"
 
 selectable = []
+disp2name = {}   # dropdown display string -> real lora name (basename used by merge)
+name2disp = {}   # real lora name -> dropdown display string
 pchanged = False
+
+def _lora_folder_name(realname):
+    """Immediate parent folder for a lora; '' if it sits at a lora root (root = bare)."""
+    try:
+        import lora
+        fn = os.path.abspath(lora.available_loras.get(realname).filename)
+    except Exception:
+        return ""
+    d = os.path.dirname(fn)
+    roots = []
+    for attr in ("lora_dir", "lyco_dir_backcompat"):
+        p = getattr(shared.cmd_opts, attr, None)
+        if p:
+            try: roots.append(os.path.normcase(os.path.abspath(p)))
+            except Exception: pass
+    if os.path.normcase(d) in roots:
+        return ""
+    return os.path.basename(d)
+
+def _build_selectable(pairs):
+    """pairs: [(realname, suffix)]. Builds folder-prefixed display strings,
+    populates disp2name/name2disp, sorts root-level first then folder then name."""
+    global disp2name, name2disp
+    disp2name, name2disp = {}, {}
+    rows = []
+    for realname, suffix in pairs:
+        folder = _lora_folder_name(realname)
+        base = f"{folder}-{realname}" if folder else realname
+        display = base + suffix
+        disp2name[display] = realname
+        name2disp[realname] = display
+        rows.append((1 if folder else 0, folder.lower(), realname.lower(), display))
+    rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    return [r[3] for r in rows]
 
 CUDA = torch.device("cuda:0")
 CPU = torch.device("cpu")
@@ -62,7 +98,7 @@ def f_changediffusers(version):
 def on_ui_tabs():
     import lora
     global selectable
-    selectable= [x[0] for x in lora.available_loras.items()]
+    selectable = _build_selectable([(x[0], "") for x in lora.available_loras.items()])
     sml_path_root = scripts.basedir()
     LWEIGHTSPRESETS="\
     NONE:0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n\
@@ -140,7 +176,7 @@ def on_ui_tabs():
             sml_deselectall = gr.Button(elem_id="slm_deselectall", value="deselect all",variant='primary')
             components.frompromptb = gr.Button(elem_id="slm_deselectall", value="get from prompt",variant='primary')
             hidenb = gr.Checkbox(value = False,visible = False)
-        sml_loras = gr.CheckboxGroup(label = "LoRAs on disk",choices = selectable,type="value",interactive=True,visible = True)
+        sml_loras = gr.Dropdown(label = "LoRAs on disk (type to search/filter)",choices = selectable,type="value",multiselect=True,interactive=True,visible = True)
         sml_loraratios = gr.TextArea(label="",value=sml_lbwpresets,visible =True,interactive  = True)  
 
         sml_selectall.click(fn = lambda x:gr.update(value = selectable),outputs = [sml_loras])
@@ -184,15 +220,16 @@ def on_ui_tabs():
         ldict = {}
 
         def toselect(input):
-            out = []
+            pairs = []
             for name, vals in input.items():
                 if (not isinstance(vals, list)) or len(vals) != 3: continue
                 dim, ltype, sdver = vals
                 add = [] if dim == "LyCORIS" else [str(dim)]
                 if ltype != "LoRA": add +=[ltype]
                 if sdver != "1.X/2.X": add += [sdver]
-                out.append(f"{name}[{','.join(add)}]" if add != ["","",""] else f"{name}")
-            return out
+                suffix = f"[{','.join(add)}]" if add != ["","",""] else ""
+                pairs.append((name, suffix))
+            return _build_selectable(pairs)
 
         def updateloras():
             lora.list_available_loras()
@@ -288,9 +325,13 @@ def on_ui_tabs():
           if hiden:return gr.update()
           if names ==[] : return ""
           else:
-            for i,n in enumerate(names):
-              if "[" in n:names[i] = n[:n.find("[")]
-            return f":{ratio},".join(names)+f":{ratio} "
+            reals = []
+            for n in names:
+              real = disp2name.get(n)
+              if real is None:  # fallback: strip [dims] then folder prefix
+                real = n[:n.find("[")] if "[" in n else n
+              reals.append(real)
+            return f":{ratio},".join(reals)+f":{ratio} "
 
         hidenb.change(fn=lambda x: False, outputs = [hidenb])
         sml_loras.change(fn=llister,inputs=[sml_loras,sml_lratio, hidenb],outputs=[sml_loranames])     
@@ -1496,8 +1537,8 @@ def frompromptf(*args):
     for name, multi, lbw in zip(names, multis, lbws):
         nml = [name,str(multi),lbw] if lbw is not None else [name,str(multi)]
         outst.append(":".join(nml))
-        if name in selectable:
-            outss.append(name)
+        if name in name2disp:
+            outss.append(name2disp[name])
     global pchanged
     pchanged = True
     return outss,",".join(outst), True
