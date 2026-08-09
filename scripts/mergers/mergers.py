@@ -1655,10 +1655,11 @@ def resetclip(theta):
 ################################################
 ##### cache
 def cachedealer(start):
+    if neo:
+        return
     if start:
         global orig_cache
-        if not neo:
-            orig_cache = shared.opts.sd_checkpoint_cache
+        orig_cache = shared.opts.sd_checkpoint_cache
         shared.opts.sd_checkpoint_cache = 0
     else:
         shared.opts.sd_checkpoint_cache = orig_cache
