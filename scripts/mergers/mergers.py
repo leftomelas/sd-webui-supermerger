@@ -54,7 +54,7 @@ try:
     from modules import launch_utils
     forge = launch_utils.git_tag()[0:2] == "f2"
     reforge = launch_utils.git_tag()[0:2] == "f1" or launch_utils.git_tag() == "classic" 
-    neo = launch_utils.git_tag() == "neo"
+    neo = launch_utils.git_tag().split(" ", 1)[0] == "neo"
 except:
     forge = reforge = neo = False
 

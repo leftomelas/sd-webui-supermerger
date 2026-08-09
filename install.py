@@ -43,7 +43,7 @@ requirements = [
 # requirements check to reinstall 0.37.1 immediately afterwards. Nothing SuperMerger
 # does needs the older version, so just require diffusers to be present.
 try:
-    if launch.git_tag() == "neo":
+    if launch.git_tag().split(" ", 1)[0] == "neo":
         requirements.append("diffusers")
     else:
         requirements.append("diffusers==0.31.0")
