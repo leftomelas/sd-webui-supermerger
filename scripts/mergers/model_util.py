@@ -122,7 +122,7 @@ def savemodel(state_dict,currentmodel,fname,savesets,metadata={}):
         return _err_msg
 
     print("Saving...")
-    isxl = "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.weight" in state_dict
+    isxl = any(k.startswith("conditioner.embedders.1.") for k in state_dict.keys())
     if isxl:
         # prune share memory tensors, "cond_stage_model." prefixed base tensors are share memory with "conditioner." prefixed tensors
         for key in list(state_dict.keys()):

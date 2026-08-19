@@ -806,7 +806,7 @@ def pluslora(lnames,loraratios,settings,output,model,save_precision,calc_precisi
         qkeys = list(theta_0.keys())
         q_dequantize(theta_0,dtype,device,torch.float16,False)
 
-    isxl = "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.weight" in theta_0.keys()
+    isxl = any(k.startswith("conditioner.embedders.1.") for k in theta_0.keys())
     isv2 = "cond_stage_model.model.transformer.resblocks.0.attn.out_proj.weight" in theta_0.keys()
     isflux = any("double_block" in k for k in theta_0.keys())
     need_revert = prefixer(theta_0) if isflux else False

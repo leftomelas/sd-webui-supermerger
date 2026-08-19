@@ -338,7 +338,7 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
     qdtypes[1] = qdtyper(theta_1)
     prefixer(theta_1)
     
-    isxl = "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.weight" in theta_1.keys()
+    isxl = any(k.startswith("conditioner.embedders.1.") for k in theta_1.keys())
     isflux = any("double_block" in k for k in theta_1.keys())
 
     #adjust
@@ -397,6 +397,9 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
     else:
         theta_0 = load_model_weights_m(model_a,1,cachetarget,device).copy()
 
+    if not isxl:
+        isxl = any(k.startswith("conditioner.embedders.1.") for k in theta_0.keys())
+
     qdtypes[0] = qdtyper(theta_0)
     need_revert = prefixer(theta_0)
 
@@ -454,7 +457,7 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
         else:
             continue
         
-        weight_index_xl = BLOCKIDXLLL.index(block)
+        weight_index_xl = BLOCKIDXLLL.index(block) if isxl and block in BLOCKIDXLLL else -1
 
         if useblocks:
             if weight_index > 0:
@@ -634,6 +637,17 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
         theta_2 = None
         del theta_2
     gc.collect()
+
+    ##### Sanity check: repair NaN/Inf produced by the merge (fp16 overflow etc.)
+    bad_keys = []
+    for key, tensor in theta_0.items():
+        if not torch.is_tensor(tensor) or not torch.is_floating_point(tensor):
+            continue
+        if not torch.isfinite(tensor).all():
+            bad_keys.append(key)
+            theta_0[key] = torch.nan_to_num(tensor, nan=0.0, posinf=65504.0, neginf=-65504.0)
+    if bad_keys:
+        print(f"WARNING: merge produced NaN/Inf in {len(bad_keys)} tensor(s), values were clamped/zeroed. First few: {bad_keys[:10]}")
 
     ##### BakeVAE
     bake_in_vae_filename = sd_vae.vae_dict.get(bake_in_vae, None)
