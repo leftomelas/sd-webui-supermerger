@@ -1210,7 +1210,7 @@ ISXLBLOCK=[True,  True,  True,  True,  True,  True,  True,  True,  True,  True, 
 BLOCKIDS = [BLOCKID,BLOCKIDXL,BLOCKIDXLL,BLOCKIDXLLL]
 
 def modeltype(sd):
-    if "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.weight" in sd.keys():
+    if any(k.startswith("conditioner.embedders.1.") for k in sd.keys()):
         return "XL"
     elif any("double"in x for x in sd.keys()):
         if any("nf4"in x for x in sd.keys()):return "flux.nf4"

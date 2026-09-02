@@ -24,7 +24,8 @@ from scripts.mergers.model_util import filenamecutter, savemodel
 from scripts.mergers.mergers import extract_super, unload_forge, q_dequantize, q_quantize, qdtyper, prefixer, BLOCKIDFLUX
 from tqdm import tqdm
 
-forge = launch_utils.git_tag()[0:2] == "f2"
+neo = launch_utils.git_tag().split(" ", 1)[0] == "neo"
+forge = launch_utils.git_tag()[0:2] == "f2" or neo
 
 selectable = []
 disp2name = {}   # dropdown display string -> real lora name (basename used by merge)
@@ -846,7 +847,7 @@ def pluslora(lnames,loraratios,settings,output,model,save_precision,calc_precisi
         qkeys = list(theta_0.keys())
         q_dequantize(theta_0,dtype,device,torch.float16,False)
 
-    isxl = "conditioner.embedders.1.model.transformer.resblocks.9.mlp.c_proj.weight" in theta_0.keys()
+    isxl = any(k.startswith("conditioner.embedders.1.") for k in theta_0.keys())
     isv2 = "cond_stage_model.model.transformer.resblocks.0.attn.out_proj.weight" in theta_0.keys()
     isflux = any("double_block" in k for k in theta_0.keys())
     need_revert = prefixer(theta_0) if isflux else False
@@ -911,7 +912,8 @@ def pluslora(lnames,loraratios,settings,output,model,save_precision,calc_precisi
     result = savemodel(theta_0,dname,output,settings)
 
     lora.loaded_loras.clear()
-    sd_models.checkpoints_loaded.clear()
+    if hasattr(sd_models, "checkpoints_loaded"):  # absent on Forge Neo
+        sd_models.checkpoints_loaded.clear()
     if forge:
         from modules.sd_models import FakeInitialModel
         sd_models.unload_model_weights()
