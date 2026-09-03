@@ -146,6 +146,24 @@ Stable diffusion XL
 |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
 |BASE|IN00|IN01|IN02|IN03|IN04|IN05|IN06|IN07|IN08|MID|OUT00|OUT01|OUT02|OUT03|OUT04|OUT05|OUT06|OUT07|OUT08|
 
+Flux (61 values)
+|1|2|3|4 - 22|23 - 60|61|
+|-|-|-|-|-|-|
+|BASE|T5|IN|D00 - D18|S00 - S37|OUT|
+
+Forge NEO DiT models: Z-Image, Anima, Krea2 (61 values)
+|1|2|3|4 - 60|61|
+|-|-|-|-|-|
+|BASE|T5|IN|B00 - B56|OUT|
+
+These architectures have a single stack of transformer blocks rather than the
+double/single split of Flux, so `Bnn` is block `nn` of that stack: 30 blocks on
+Z-Image, 28 on Anima and Krea2. `IN` covers the patch, time and rope embedders,
+plus the noise and context refiners of Z-Image. `OUT` is the final layer. `T5`
+covers the text side that ships inside the diffusion model, which is the LLM
+adapter on Anima and the text fusion tower on Krea2. The list is the same length
+as the Flux one, so a weight string written for Flux can be used unchanged.
+
 ## XYZ Plot
 Performs sequential merge image generation. Effective in all merge modes.
 ### alpha, beta

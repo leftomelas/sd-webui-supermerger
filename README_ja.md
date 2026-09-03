@@ -148,6 +148,18 @@ Stable diffusion XL
 |-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|-|
 |BASE|IN00|IN01|IN02|IN03|IN04|IN05|IN06|IN07|IN08|MID|OUT00|OUT01|OUT02|OUT03|OUT04|OUT05|OUT06|OUT07|OUT08|
 
+Flux (61個)
+|1|2|3|4 - 22|23 - 60|61|
+|-|-|-|-|-|-|
+|BASE|T5|IN|D00 - D18|S00 - S37|OUT|
+
+Forge NEOのDiTモデル: Z-Image, Anima, Krea2 (61個)
+|1|2|3|4 - 60|61|
+|-|-|-|-|-|
+|BASE|T5|IN|B00 - B56|OUT|
+
+これらのアーキテクチャはFluxのようなdouble/singleの分割がなく、transformerブロックが一列に並んでいます。`Bnn`はその`nn`番目のブロックで、ブロック数はZ-Imageが30、AnimaとKrea2が28です。`IN`はパッチ/時刻/rope embedderと、Z-Imageのnoise refiner・context refinerを含みます。`OUT`はfinal layerです。`T5`は拡散モデル内部に同梱されるテキスト側で、AnimaではLLM adapter、Krea2ではtext fusion towerが該当します。個数はFluxと同じなので、Flux用に書いた重み文字列をそのまま使えます。
+
 ## XYZ Plot
 ## XYZプロット
 連続的にマージ画像を生成します。すべてのマージモードで効果的です。
