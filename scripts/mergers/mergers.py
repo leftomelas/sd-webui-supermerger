@@ -405,6 +405,15 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
 
     print(f"Model precisions : {qdtypes}")
 
+    unify_fp8_scales(theta_0, theta_1, theta_2)
+
+    quants = [(name, quant_formats(sd)) for name, sd in
+              (("A", theta_0), ("B", theta_1), ("C", theta_2)) if sd is not None]
+    quants = [(name, fmt) for name, fmt in quants if fmt]
+    if len({tuple(sorted(fmt)) for _, fmt in quants}) > 1:
+        described = ", ".join(f"{name}: {'/'.join(sorted(fmt))}" for name, fmt in quants)
+        return f"ERROR: the models are quantized differently ({described}). Merging their raw values would produce noise, use checkpoints quantized the same way.", *NON4
+
     if qdtypes[0] != qdtypes[1]:
         print(f"Precision of model B (or B-C) is changing to {qdtypes[0]}...")
         to_qdtype(theta_0, theta_1, qdtypes[0], qdtypes[1], device, "Model A", "Model B")
@@ -622,14 +631,16 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
         if stopped:
             return "STOPPED", *NON4
 
-    if need_revert:
-        prefixer(theta_0, True)
-
     for key in tqdm(theta_1.keys(), desc="Stage 2/2"):
         if key in CHCKPOINT_DICT_SKIP_ON_MERGE or isflux:
             continue
         if "model" in key and key not in theta_0:
             theta_0.update({key:theta_1[key]})
+
+    # both dicts carry the prefix until here, reverting earlier made every key of
+    # theta_1 look missing from theta_0 and the stage above duplicated all of them
+    if need_revert:
+        prefixer(theta_0, True)
 
     theta_1 = None
     del theta_1
@@ -643,9 +654,12 @@ def smerge(weights_a,weights_b,model_a,model_b,model_c,base_alpha,base_beta,mode
     for key, tensor in theta_0.items():
         if not torch.is_tensor(tensor) or not torch.is_floating_point(tensor):
             continue
-        if not torch.isfinite(tensor).all():
+        # torch has no isfinite kernel for the float8 types, so an fp8 checkpoint
+        # such as the Krea2 releases has to be checked through a float32 view
+        check = tensor.float() if tensor.element_size() == 1 else tensor
+        if not torch.isfinite(check).all():
             bad_keys.append(key)
-            theta_0[key] = torch.nan_to_num(tensor, nan=0.0, posinf=65504.0, neginf=-65504.0)
+            theta_0[key] = torch.nan_to_num(check, nan=0.0, posinf=65504.0, neginf=-65504.0).to(tensor.dtype)
     if bad_keys:
         print(f"WARNING: merge produced NaN/Inf in {len(bad_keys)} tensor(s), values were clamped/zeroed. First few: {bad_keys[:10]}")
 
@@ -2008,14 +2022,31 @@ def prefixer(t, revert = False):
         return
 
     need_revert = False
+
+    # Some checkpoints name the diffusion model "net." instead of
+    # "model.diffusion_model.". Both conventions are in the wild for Anima, and two
+    # files that disagree share no key at all: nothing gets merged and the second one
+    # is appended whole. Normalise before merging.
+    if any(key.startswith("net.") for key in keys):
+        for key in keys:
+            if key.startswith("net."):
+                t[PREFIX_M + key[len("net."):]] = t.pop(key)
+        print('"net." replaced with "model.diffusion_model." in prifix.')
+        need_revert = True
+        keys = list(t.keys())
+
+    # A checkpoint that holds only the diffusion model has no prefix at all. The merge
+    # keys off "model" being in the name and the backend adds the prefix when loading,
+    # so add it here as well. Matching a fixed list of Flux prefixes missed Z-Image
+    # entirely, whose keys start with layers/cap_embedder/noise_refiner.
+    if any(key.startswith(PREFIX_M) for key in keys):
+        return need_revert
+
     for key in keys:
-        if key.startswith(PREFIXFIX):
-            t["model.diffusion_model." + key] = t.pop(key)
-            need_revert = True
-    if need_revert:
-        print('"model.diffusion_model." added to prifix.')
+        t[PREFIX_M + key] = t.pop(key)
+    print('"model.diffusion_model." added to prifix.')
     gc.collect()
-    return need_revert
+    return True
 
 def forge_save(filename):
     print("Saveing Model...")
@@ -2031,6 +2062,66 @@ def forge_save(filename):
 
 ###############################################################
 ######## QLoRA   
+FP8_SCALE = "_scale"
+
+def unify_fp8_scales(*sds):
+    """Put float8 weights that carry a separate scale on a common scale.
+
+    Krea2 and other releases store a weight as float8 plus a scalar
+    "<key>_scale". Two such checkpoints normally use different scales, so mixing
+    the raw float8 values mixes numbers that mean different things and the merge
+    comes out as noise. Once both sides share a scale the ordinary weighted sum
+    is exact again. Done one tensor at a time so nothing is expanded in bulk.
+    """
+    fp8 = getattr(torch, "float8_e4m3fn", None)
+    sds = [sd for sd in sds if sd is not None]
+    if fp8 is None or len(sds) < 2:
+        return
+
+    base = sds[0]
+    targets = [k[: -len(FP8_SCALE)] for k in base
+               if k.endswith(FP8_SCALE) and k[: -len(FP8_SCALE)] in base
+               and getattr(base[k[: -len(FP8_SCALE)]], "dtype", None) is fp8]
+    if not targets:
+        return
+
+    fmax = torch.finfo(fp8).max
+    changed = 0
+    for key in targets:
+        skey = key + FP8_SCALE
+        if not all(key in sd and skey in sd for sd in sds):
+            continue
+        scales = [sd[skey].to(torch.float32) for sd in sds]
+        common = torch.stack([scale.reshape(-1).max() for scale in scales]).max()
+        for sd, scale in zip(sds, scales):
+            if torch.equal(scale.reshape(-1).max(), common):
+                continue
+            weight = sd[key].to(torch.float32) * (scale / common)
+            sd[key] = weight.clamp(-fmax, fmax).to(fp8)
+            sd[skey] = common.clone().to(sd[skey].dtype)
+            changed += 1
+
+    if changed:
+        print(f"SuperMerger: put {changed} float8 tensor(s) on a common scale before merging")
+
+def quant_formats(sd):
+    """The quantization a checkpoint declares through its comfy_quant markers.
+
+    ComfyUI style quantized checkpoints keep one marker per quantized tensor, for
+    example {"format": "int8_tensorwise"} or {"format": "float8_e4m3fn"}. Two
+    checkpoints quantized differently share no common numeric meaning, so merging
+    their raw values produces noise.
+    """
+    formats = set()
+    for key, value in sd.items():
+        if not key.endswith("comfy_quant"):
+            continue
+        try:
+            formats.add(json.loads(bytes(value.cpu().numpy()).decode("utf-8")).get("format", "unknown"))
+        except Exception:
+            formats.add("unknown")
+    return formats
+
 def qdtyper(sd):
     if any("fp4" in k for k in sd):
         return "fp4"
